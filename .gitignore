@@ -1,2 +1,5 @@
 .env
-src/strava_mcp_server/__pycache__/server.cpython-312.pyc
+__pycache__/
+*.pyc
+*.pyo
+recent_runs.json
