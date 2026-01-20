@@ -117,10 +117,29 @@ class StravaClient:
         activity = self._make_request(f"activities/{activity_id}")
         return self._filter_activity(activity)
 
+    def get_activity_streams(
+        self, activity_id: int, keys: list[str]
+    ) -> list[dict]:
+        """
+        Get stream data for a specific activity.
+
+        Args:
+            activity_id: ID of the activity to retrieve streams for
+            keys: List of stream types to retrieve (e.g., ['heartrate', 'pace'])
+
+        Returns:
+            List of stream objects containing time-series data
+        """
+        keys_param = ",".join(keys)
+        params = {"keys": keys_param, "key_by_type": "true"}
+        streams = self._make_request(f"activities/{activity_id}/streams", params)
+        return streams
+
     def _filter_activity(self, activity: dict) -> dict:
         """Filter activity to only include specific keys and rename with units."""
         # Define field mappings with units
         field_mappings = {
+            "id": "id",  # Activity ID for fetching streams
             "calories": "calories",
             "distance": "distance_metres",
             "elapsed_time": "elapsed_time_seconds",
@@ -314,6 +333,33 @@ def get_recent_activities(days: int = 7, limit: int = 10) -> dict[str, Any]:
 
         activities = strava_client.get_activities(limit=limit, after=after)
         return {"data": activities}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def get_activity_streams(activity_id: int, stream_types: str = "heartrate,pace") -> dict[str, Any]:
+    """
+    Get stream data for a specific activity (e.g., heartrate, pace, altitude).
+
+    Args:
+        activity_id: ID of the activity to retrieve streams for
+        stream_types: Comma-separated list of stream types to retrieve.
+                     Available types: heartrate, pace, altitude, cadence, distance,
+                     moving, temperature, time, watts (default: "heartrate,pace")
+
+    Returns:
+        Dictionary containing stream data indexed by stream type
+    """
+    if strava_client is None:
+        return {
+            "error": "Strava client not initialized. Please provide refresh token, client ID, and client secret."  # noqa: E501
+        }
+
+    try:
+        keys = [key.strip() for key in stream_types.split(",")]
+        streams = strava_client.get_activity_streams(activity_id, keys)
+        return {"data": streams}
     except Exception as e:
         return {"error": str(e)}
 

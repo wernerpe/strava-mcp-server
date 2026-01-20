@@ -43,6 +43,22 @@ def main():
         client.close()
         return
 
+    # Fetch heartrate and pace streams for each run
+    print("Fetching heartrate and pace streams for each run...")
+    for i, run in enumerate(runs):
+        activity_id = run.get('id')
+        if activity_id:
+            try:
+                streams = client.get_activity_streams(activity_id, ['heartrate', 'pace'])
+                run['streams'] = streams
+                print(f"  [{i+1}/{len(runs)}] Fetched streams for: {run.get('name', 'Unnamed')}")
+            except Exception as e:
+                print(f"  [{i+1}/{len(runs)}] Warning: Could not fetch streams for {run.get('name', 'Unnamed')}: {e}")
+                run['streams'] = None
+        else:
+            run['streams'] = None
+    print()
+
     # Display detailed info for each run
     print("=" * 100)
     print(f"{'Date':<12} {'Name':<30} {'Distance (km)':<15} {'Time':<12} {'Pace (min/km)'}")
@@ -88,6 +104,11 @@ def main():
     print(f"  Total time: {total_time_hours:.2f} hours")
     print(f"  Average pace: {int(avg_pace_min_per_km)}:{int((avg_pace_min_per_km % 1) * 60):02d} min/km")
     print(f"  Average run distance: {total_distance_km / len(runs):.2f} km")
+
+    # Stream data summary
+    runs_with_streams = sum(1 for r in runs if r.get('streams'))
+    print(f"\nStream Data:")
+    print(f"  Runs with heartrate/pace data: {runs_with_streams}/{len(runs)}")
 
     client.close()
     print("\nDone!")
