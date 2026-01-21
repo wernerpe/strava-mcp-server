@@ -135,6 +135,19 @@ class StravaClient:
         streams = self._make_request(f"activities/{activity_id}/streams", params)
         return streams
 
+    def get_activity_laps(self, activity_id: int) -> list[dict]:
+        """
+        Get laps data for a specific activity.
+
+        Args:
+            activity_id: ID of the activity to retrieve laps for
+
+        Returns:
+            List of lap objects containing lap details
+        """
+        laps = self._make_request(f"activities/{activity_id}/laps")
+        return laps
+
     def _filter_activity(self, activity: dict) -> dict:
         """Filter activity to only include specific keys and rename with units."""
         # Define field mappings with units
