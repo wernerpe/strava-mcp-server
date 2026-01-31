@@ -9,55 +9,28 @@ This script creates a beautiful calendar view showing:
 - Hover tooltips with detailed information
 """
 
+import argparse
 import json
 import os
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Dict, List, Optional
 import webbrowser
+from datetime import datetime, timedelta
+from typing import Any
 
-
-RUN_DATA_DIR = Path("run_data")
-
-
-def load_training_plan(plan_path: str) -> Optional[Dict]:
-    """Load training plan from JSON file."""
-    try:
-        with open(plan_path, 'r') as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Error loading training plan: {e}")
-        return None
-
-
-def load_all_runs() -> List[Dict]:
-    """Load all run data from the run_data directory."""
-    runs = []
-    if not RUN_DATA_DIR.exists():
-        return runs
-
-    for file_path in RUN_DATA_DIR.glob("run_*.json"):
-        try:
-            with open(file_path, 'r') as f:
-                run = json.load(f)
-                runs.append(run)
-        except Exception:
-            pass
-
-    return runs
+from strava_mcp_server.storage.runs import RunStorage
+from strava_mcp_server.storage.training_plans import TrainingPlanStorage
 
 
 def parse_date(date_str: str) -> datetime:
     """Parse date string to datetime."""
-    if 'T' in date_str or 'Z' in date_str:
-        return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-    return datetime.strptime(date_str, '%Y-%m-%d')
+    if "T" in date_str or "Z" in date_str:
+        return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    return datetime.strptime(date_str, "%Y-%m-%d")
 
 
-def calculate_pace_from_run(run: Dict) -> str:
+def calculate_pace_from_run(run: dict[str, Any]) -> str:
     """Calculate pace from actual run data."""
-    distance = run.get('distance_metres', 0)
-    time = run.get('moving_time_seconds', 0)
+    distance = run.get("distance_metres", 0)
+    time = run.get("moving_time_seconds", 0)
 
     if distance > 0 and time > 0:
         speed_mps = distance / time
@@ -68,28 +41,30 @@ def calculate_pace_from_run(run: Dict) -> str:
     return "N/A"
 
 
-def find_run_for_date(date_obj, actual_runs: List[Dict]) -> Optional[Dict]:
+def find_run_for_date(date_obj: Any, actual_runs: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Find actual run that matches a specific date (within 1 day)."""
     for run in actual_runs:
-        run_date = parse_date(run.get('start_date', '')).date()
+        run_date = parse_date(run.get("start_date", "")).date()
         if abs((run_date - date_obj).days) <= 1:
             return run
     return None
 
 
-def generate_html(plan: Dict, actual_runs: List[Dict], output_file: str):
+def generate_html(
+    plan: dict[str, Any], actual_runs: list[dict[str, Any]], output_file: str
+) -> None:
     """Generate the HTML calendar file."""
 
     # Prepare data structure for calendar
-    plan_data = {}
-    for week in plan.get('weeks', []):
-        for workout in week.get('runs', []):
-            if 'date' in workout:
-                date_str = workout['date']
+    plan_data: dict[str, Any] = {}
+    for week in plan.get("weeks", []):
+        for workout in week.get("runs", []):
+            if "date" in workout:
+                date_str = workout["date"]
                 plan_data[date_str] = workout
 
     # Match actual runs to planned workouts
-    actual_data = {}
+    actual_data: dict[str, Any] = {}
     for date_str, planned in plan_data.items():
         date_obj = parse_date(date_str).date()
         actual_run = find_run_for_date(date_obj, actual_runs)
@@ -97,17 +72,19 @@ def generate_html(plan: Dict, actual_runs: List[Dict], output_file: str):
             actual_data[date_str] = actual_run
 
     # Determine calendar date range
-    plan_start = parse_date(plan.get('plan_start_date', '')).date()
-    plan_end = parse_date(plan.get('plan_end_date', '')).date()
+    plan_start = parse_date(plan.get("plan_start_date", "")).date()
+    plan_end = parse_date(plan.get("plan_end_date", "")).date()
 
     # Start from the first day of the start month
     cal_start = plan_start.replace(day=1)
     # End at the last day of the end month
-    cal_end = (plan_end.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    cal_end = (plan_end.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(
+        days=1
+    )
 
-    goal_race = plan.get('goal_race', {})
+    goal_race = plan.get("goal_race", {})
 
-    html_content = f'''<!DOCTYPE html>
+    html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -509,14 +486,12 @@ def generate_html(plan: Dict, actual_runs: List[Dict], output_file: str):
                 const firstDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
                 const lastDay = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
 
-                // Add empty cells for days before month starts
                 for (let i = 0; i < firstDay.getDay(); i++) {{
                     const emptyDay = document.createElement('div');
                     emptyDay.className = 'day empty';
                     daysGrid.appendChild(emptyDay);
                 }}
 
-                // Add days of the month
                 for (let day = 1; day <= lastDay.getDate(); day++) {{
                     const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
                     const dateStr = date.toISOString().split('T')[0];
@@ -524,12 +499,10 @@ def generate_html(plan: Dict, actual_runs: List[Dict], output_file: str):
                     const dayDiv = document.createElement('div');
                     dayDiv.className = 'day';
 
-                    // Check if it's today
                     if (date.getTime() === today.getTime()) {{
                         dayDiv.classList.add('today');
                     }}
 
-                    // Check if it's race day
                     if (dateStr === raceDate) {{
                         dayDiv.classList.add('race-day');
                     }}
@@ -557,7 +530,6 @@ def generate_html(plan: Dict, actual_runs: List[Dict], output_file: str):
                             dayDiv.appendChild(details);
                         }}
 
-                        // Add status indicator
                         if (date < today) {{
                             const statusIndicator = document.createElement('div');
                             statusIndicator.className = 'status-indicator';
@@ -623,7 +595,6 @@ def generate_html(plan: Dict, actual_runs: List[Dict], output_file: str):
                 content += `<div class="tooltip-row"><span class="tooltip-label">Pace:</span> <span class="tooltip-value">${{actualPace}} /km</span></div>`;
                 content += `<div class="tooltip-row"><span class="tooltip-label">Time:</span> <span class="tooltip-value">${{formatTime(actualTime)}}</span></div>`;
 
-                // Add comparison if applicable
                 if (planned.target_pace_min_per_km && actualPace !== 'N/A') {{
                     const plannedSeconds = paceToSeconds(planned.target_pace_min_per_km);
                     const actualSeconds = paceToSeconds(actualPace);
@@ -697,46 +668,72 @@ def generate_html(plan: Dict, actual_runs: List[Dict], output_file: str):
         generateCalendar();
     </script>
 </body>
-</html>'''
+</html>"""
 
-    with open(output_file, 'w') as f:
+    with open(output_file, "w") as f:
         f.write(html_content)
 
 
-def main():
+def main() -> int:
     """Main function to generate training calendar."""
-    import sys
+    parser = argparse.ArgumentParser(
+        description="Generate an interactive HTML calendar for training plan visualization"
+    )
+    parser.add_argument(
+        "plan_id",
+        nargs="?",
+        help="Plan ID to visualize (if not provided, uses the most recent active plan)",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        default="training_calendar.html",
+        help="Output HTML file path (default: training_calendar.html)",
+    )
+    parser.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Don't open the calendar in a browser",
+    )
 
-    # Get plan path from command line or use default
-    if len(sys.argv) > 1:
-        plan_path = sys.argv[1]
-    else:
-        plan_path = "training_plan.json"
-
-    output_file = "training_calendar.html"
+    args = parser.parse_args()
 
     # Load training plan
-    print(f"Loading training plan from {plan_path}...")
-    plan = load_training_plan(plan_path)
-    if not plan:
-        print("Please provide a valid training plan JSON file.")
-        print(f"Usage: python {sys.argv[0]} [path_to_plan.json]")
-        return 1
+    plan_storage = TrainingPlanStorage()
+
+    if args.plan_id:
+        plan = plan_storage.get_plan(args.plan_id)
+        if not plan:
+            print(f"Error: Plan not found: {args.plan_id}")
+            return 1
+    else:
+        # Get the most recent active plan
+        plans = plan_storage.list_plans()
+        active_plans = [p for p in plans if p.get("is_active", True)]
+        if not active_plans:
+            print("No active training plans found.")
+            print("Use save_training_plan() to create a plan first.")
+            return 1
+        plan = plan_storage.get_plan(active_plans[0]["id"])
+        if not plan:
+            print("Error loading plan")
+            return 1
 
     # Load actual runs
     print("Loading actual run data...")
-    actual_runs = load_all_runs()
+    run_storage = RunStorage()
+    actual_runs = run_storage.load_all_runs()
     print(f"Loaded {len(actual_runs)} runs")
 
     # Generate HTML
-    print(f"Generating calendar HTML to {output_file}...")
-    generate_html(plan, actual_runs, output_file)
+    print(f"Generating calendar HTML to {args.output}...")
+    generate_html(plan, actual_runs, args.output)
 
-    print(f"\nCalendar generated successfully!")
-    print(f"Opening {output_file} in your browser...")
+    print("\nCalendar generated successfully!")
 
-    # Open in browser
-    webbrowser.open('file://' + os.path.abspath(output_file))
+    if not args.no_open:
+        print(f"Opening {args.output} in your browser...")
+        webbrowser.open("file://" + os.path.abspath(args.output))
 
     return 0
 

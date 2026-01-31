@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(uv run python:*)",
-      "mcp__strava__get_training_report"
+      "mcp__strava__get_training_report",
+      "Bash(tree:*)",
+      "Bash(uv run:*)"
     ]
   }
 }

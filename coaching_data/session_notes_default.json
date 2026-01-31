@@ -1,0 +1,12 @@
+[
+  {
+    "timestamp": "2026-01-30T20:22:42.006626",
+    "athlete_id": "default",
+    "note_type": "session_summary",
+    "summary": "Test session",
+    "key_points": [
+      "Point 1",
+      "Point 2"
+    ]
+  }
+]

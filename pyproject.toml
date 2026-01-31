@@ -14,6 +14,7 @@ dependencies = [
     "rich>=13.0.0",
     "requests (>=2.32.5,<3.0.0)",
     "matplotlib>=3.7.0",
+    "pydantic>=2.0.0",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -30,6 +31,10 @@ build-backend = "hatchling.build"
 
 [project.scripts]
 strava-mcp-server = "strava_mcp_server:main"
+strava-analyze-plan = "strava_mcp_server.cli.analyze_plan:main"
+strava-generate-report = "strava_mcp_server.cli.generate_report:main"
+strava-generate-calendar = "strava_mcp_server.cli.generate_calendar:main"
+strava-update-data = "strava_mcp_server.cli.update_data:main"
 
 [project.optional-dependencies]
 dev = [
