@@ -4,14 +4,21 @@ MCP server for Strava API integration.
 This server exposes methods to query the Strava API for athlete activities.
 """
 
+import json
 import os
 import time
+from collections import defaultdict
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Optional
 
 import httpx
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+
+# Configuration for local run data storage
+RUN_DATA_DIR = Path(__file__).parent.parent.parent / "run_data"
+LOOKBACK_WEEKS = 4  # How many weeks back to fetch
 
 load_dotenv()
 
@@ -373,6 +380,332 @@ def get_activity_streams(activity_id: int, stream_types: str = "heartrate,pace")
         keys = [key.strip() for key in stream_types.split(",")]
         streams = strava_client.get_activity_streams(activity_id, keys)
         return {"data": streams}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ============================================================================
+# Training Report Helper Functions
+# ============================================================================
+
+
+def format_pace(speed_mps: float) -> str:
+    """Convert speed in m/s to pace in min:sec/km format (e.g., '5:45')."""
+    if speed_mps <= 0:
+        return "N/A"
+    pace_min_per_km = 1000 / (speed_mps * 60)
+    mins = int(pace_min_per_km)
+    secs = int((pace_min_per_km % 1) * 60)
+    return f"{mins}:{secs:02d}"
+
+
+def format_duration(seconds: float) -> str:
+    """Convert seconds to HH:MM:SS or MM:SS format."""
+    seconds = int(seconds)
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def ensure_run_data_dir() -> None:
+    """Create the run_data directory if it doesn't exist."""
+    RUN_DATA_DIR.mkdir(exist_ok=True)
+
+
+def get_existing_run_ids() -> set[int]:
+    """Get the set of activity IDs that are already stored locally."""
+    existing_ids: set[int] = set()
+    if not RUN_DATA_DIR.exists():
+        return existing_ids
+    for file_path in RUN_DATA_DIR.glob("run_*.json"):
+        try:
+            activity_id = int(file_path.stem.split("_")[1])
+            existing_ids.add(activity_id)
+        except (IndexError, ValueError):
+            pass
+    return existing_ids
+
+
+def save_run(run: dict, activity_id: int) -> None:
+    """Save a single run to a JSON file."""
+    file_path = RUN_DATA_DIR / f"run_{activity_id}.json"
+    with open(file_path, "w") as f:
+        json.dump(run, f, indent=2)
+
+
+def load_local_runs() -> list[dict]:
+    """Load all run data from the run_data directory."""
+    runs = []
+    if not RUN_DATA_DIR.exists():
+        return runs
+    for file_path in RUN_DATA_DIR.glob("run_*.json"):
+        try:
+            with open(file_path) as f:
+                run = json.load(f)
+                runs.append(run)
+        except Exception:
+            pass
+    # Sort by date (most recent first)
+    runs.sort(key=lambda r: r.get("start_date", ""), reverse=True)
+    return runs
+
+
+def fetch_run_details(client: StravaClient, activity_id: int) -> dict:
+    """Fetch streams and laps for a single run."""
+    run_details: dict[str, Any] = {}
+    try:
+        streams = client.get_activity_streams(
+            activity_id, ["heartrate", "pace", "altitude", "cadence"]
+        )
+        run_details["streams"] = streams
+    except Exception:
+        run_details["streams"] = None
+    try:
+        laps = client.get_activity_laps(activity_id)
+        run_details["laps"] = laps
+    except Exception:
+        run_details["laps"] = []
+    return run_details
+
+
+def fetch_and_save_new_runs(client: StravaClient) -> int:
+    """
+    Fetch recent runs from Strava and save new ones locally.
+
+    Returns:
+        Number of new runs saved
+    """
+    ensure_run_data_dir()
+    existing_ids = get_existing_run_ids()
+
+    # Calculate date range
+    after_date = datetime.now() - timedelta(weeks=LOOKBACK_WEEKS)
+    after_timestamp = int(after_date.timestamp())
+
+    # Fetch activities
+    all_activities = client.get_activities(limit=200, after=after_timestamp)
+
+    # Filter for running activities only
+    runs = [a for a in all_activities if "run" in a.get("sport_type", "").lower()]
+
+    # Identify new runs
+    new_runs = [r for r in runs if r.get("id") not in existing_ids]
+
+    # Fetch and save new runs
+    for run in new_runs:
+        activity_id = run.get("id")
+        if not activity_id:
+            continue
+        details = fetch_run_details(client, activity_id)
+        complete_run = {**run, **details}
+        save_run(complete_run, activity_id)
+
+    return len(new_runs)
+
+
+def get_week_key(date_str: str) -> tuple[int, int]:
+    """Get (year, ISO week number) from date string."""
+    dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    iso_cal = dt.isocalendar()
+    return iso_cal[0], iso_cal[1]
+
+
+def get_week_date_range(year: int, week: int) -> str:
+    """Get the date range string for a given ISO week."""
+    # ISO week 1 starts on the Monday of the week containing Jan 4
+    jan4 = datetime(year, 1, 4)
+    week1_monday = jan4 - timedelta(days=jan4.weekday())
+    week_monday = week1_monday + timedelta(weeks=week - 1)
+    week_sunday = week_monday + timedelta(days=6)
+    return f"{week_monday.strftime('%Y-%m-%d')} to {week_sunday.strftime('%Y-%m-%d')}"
+
+
+def group_runs_by_week(runs: list[dict]) -> dict[tuple[int, int], list[dict]]:
+    """Group runs by ISO week number."""
+    weeks: dict[tuple[int, int], list[dict]] = defaultdict(list)
+    for run in runs:
+        date_str = run.get("start_date", "")
+        if date_str:
+            week_key = get_week_key(date_str)
+            weeks[week_key].append(run)
+    return dict(weeks)
+
+
+def calculate_summary_stats(runs: list[dict]) -> dict:
+    """Calculate summary statistics for a list of runs."""
+    if not runs:
+        return {
+            "total_runs": 0,
+            "total_distance_km": 0,
+            "total_time": "0:00",
+            "total_elevation_m": 0,
+            "avg_pace": "N/A",
+            "avg_hr": None,
+        }
+
+    total_distance = sum(r.get("distance_metres", 0) for r in runs)
+    total_time = sum(r.get("moving_time_seconds", 0) for r in runs)
+    total_elevation = sum(r.get("total_elevation_gain_metres", 0) for r in runs)
+
+    # Calculate average pace
+    avg_pace = "N/A"
+    if total_distance > 0 and total_time > 0:
+        avg_speed = total_distance / total_time
+        avg_pace = format_pace(avg_speed)
+
+    # Get average heartrate from laps
+    hr_values = []
+    for run in runs:
+        laps = run.get("laps", [])
+        for lap in laps:
+            hr = lap.get("average_heartrate", 0)
+            if hr > 0:
+                hr_values.append(hr)
+
+    avg_hr = round(sum(hr_values) / len(hr_values)) if hr_values else None
+
+    return {
+        "total_runs": len(runs),
+        "total_distance_km": round(total_distance / 1000, 2),
+        "total_time": format_duration(total_time),
+        "total_elevation_m": round(total_elevation),
+        "avg_pace": avg_pace,
+        "avg_hr": avg_hr,
+    }
+
+
+def build_individual_run(run: dict) -> dict:
+    """Build the individual run object for the report."""
+    activity_id = run.get("id")
+    name = run.get("name", "Unnamed Run")
+    date_str = run.get("start_date", "")[:10]
+    distance_km = round(run.get("distance_metres", 0) / 1000, 2)
+    time_sec = run.get("moving_time_seconds", 0)
+    elevation = round(run.get("total_elevation_gain_metres", 0))
+    avg_speed = run.get("average_speed_mps", 0)
+    pace = format_pace(avg_speed)
+
+    # Get average HR from laps
+    laps_data = run.get("laps", [])
+    hr_values = [lap.get("average_heartrate", 0) for lap in laps_data if lap.get("average_heartrate", 0) > 0]
+    avg_hr = round(sum(hr_values) / len(hr_values)) if hr_values else None
+
+    # Build laps list
+    laps = []
+    for i, lap in enumerate(laps_data, 1):
+        lap_distance_km = round(lap.get("distance", 0) / 1000, 2)
+        lap_speed = lap.get("average_speed", 0)
+        lap_pace = format_pace(lap_speed)
+        lap_hr = lap.get("average_heartrate", 0)
+        laps.append({
+            "km": i,
+            "distance_km": lap_distance_km,
+            "pace": lap_pace,
+            "hr": round(lap_hr) if lap_hr > 0 else None,
+        })
+
+    return {
+        "id": activity_id,
+        "name": name,
+        "date": date_str,
+        "distance_km": distance_km,
+        "time": format_duration(time_sec),
+        "pace": pace,
+        "elevation_m": elevation,
+        "avg_hr": avg_hr,
+        "laps": laps,
+    }
+
+
+def build_training_report(runs: list[dict]) -> dict:
+    """Assemble the full training report structure."""
+    # Overall summary
+    overall_summary = calculate_summary_stats(runs)
+
+    # Group by week
+    runs_by_week = group_runs_by_week(runs)
+
+    # Weekly summaries (sorted most recent first)
+    weekly_summaries = []
+    sorted_weeks = sorted(runs_by_week.items(), key=lambda x: (x[0][0], x[0][1]), reverse=True)
+    for (year, week), week_runs in sorted_weeks:
+        stats = calculate_summary_stats(week_runs)
+        weekly_summaries.append({
+            "year": year,
+            "week": week,
+            "date_range": get_week_date_range(year, week),
+            "runs": stats["total_runs"],
+            "distance_km": stats["total_distance_km"],
+            "time": stats["total_time"],
+            "elevation_m": stats["total_elevation_m"],
+            "avg_pace": stats["avg_pace"],
+            "avg_hr": stats["avg_hr"],
+        })
+
+    # Individual runs (sorted by date, most recent first)
+    individual_runs = [build_individual_run(run) for run in runs]
+
+    return {
+        "overall_summary": overall_summary,
+        "weekly_summaries": weekly_summaries,
+        "individual_runs": individual_runs,
+    }
+
+
+@mcp.tool()
+def get_training_report(refresh: bool = True) -> dict[str, Any]:
+    """
+    Get a comprehensive training report with recent running data.
+
+    This tool fetches the latest running activities from Strava (if refresh=True),
+    stores them locally, and returns a structured report with overall summary,
+    weekly breakdowns, and individual run details including lap splits.
+
+    Args:
+        refresh: Whether to fetch latest data from Strava first (default: True).
+                 Set to False to only use locally cached data.
+
+    Returns:
+        Dictionary containing:
+        - overall_summary: Total runs, distance, time, elevation, avg pace, avg HR
+        - weekly_summaries: Per-week breakdown with date range and stats
+        - individual_runs: List of runs with date, name, distance, pace, HR, laps
+    """
+    try:
+        new_runs_count = 0
+
+        # Optionally refresh data from Strava
+        if refresh:
+            if strava_client is None:
+                return {
+                    "error": "Strava client not initialized. Please provide refresh token, client ID, and client secret."  # noqa: E501
+                }
+            new_runs_count = fetch_and_save_new_runs(strava_client)
+
+        # Load all local runs
+        runs = load_local_runs()
+
+        if not runs:
+            return {
+                "data": {
+                    "overall_summary": calculate_summary_stats([]),
+                    "weekly_summaries": [],
+                    "individual_runs": [],
+                },
+                "message": "No run data found. Make sure you have running activities on Strava.",
+            }
+
+        # Build the report
+        report = build_training_report(runs)
+
+        result: dict[str, Any] = {"data": report}
+        if refresh:
+            result["new_runs_fetched"] = new_runs_count
+
+        return result
     except Exception as e:
         return {"error": str(e)}
 
