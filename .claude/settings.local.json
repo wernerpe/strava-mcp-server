@@ -4,7 +4,9 @@
       "Bash(uv run python:*)",
       "mcp__strava__get_training_report",
       "Bash(tree:*)",
-      "Bash(uv run:*)"
+      "Bash(uv run:*)",
+      "Bash(claude mcp:*)",
+      "mcp__strava__get_coaching_context"
     ]
   }
 }
